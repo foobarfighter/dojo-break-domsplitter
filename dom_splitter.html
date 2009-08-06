@@ -1,0 +1,240 @@
+<html>
+<head>
+  <title>DOM Splitter</title>
+	<script type="text/javascript">
+		var TEXT_NODE = 3;
+		var ELEMENT_NODE = 1;
+		var SPLIT_TEXT = "__SPLIT_POINT__";
+		var MAX_SPLIT_NODE_INDEX = 255;
+	
+		var Selection = function(node, startIndex, endIndex) {
+			this._node = node;
+			this._startIndex = startIndex;
+			this._endIndex = endIndex;
+			
+			this.getStart = function() {
+				return this._startIndex;
+			}
+			this.getBeforeText = function() {
+				return this._node.textContent.substring(0, this.getStart());
+			}
+			this.getEnd = function() {
+				return this._endIndex;
+			}
+			this.getAfterText = function() {
+				return this._node.textContent.substr(this.getEnd());
+			}
+			this.getNode = function() {
+				return this._node;
+			}
+			this.getSelectedText = function() {
+				return this._node.textContent.substring(this.getStart(), this.getEnd());
+			}
+			this.split = function() {
+				var startTextNode = document.createTextNode(this.getBeforeText());
+				var endTextNode = document.createTextNode(this.getAfterText());
+				return new Tree(startTextNode, endTextNode);
+			}
+		}
+		
+		function Splitter(containerNode, selection) {
+			
+			this._containerNode = containerNode;
+			this._selection = selection;
+			this._newContent = document.createElement("span");
+			
+			this.doSplit = function() {
+				// TODO firstChild should be the root parent node that contains the selectionNode
+				var paragraphNode = this._findParentParagraphNode(this._selection.getNode(), this._containerNode);
+				var tagStack = this._buildTagStack();
+				var splitTree = this._split(this._selection.getNode(), paragraphNode);
+				var pn = paragraphNode.parentNode;
+				
+				var splitText = this._selection.split();
+				
+				splitTree.getLeftTree().getBottomNode().appendChild(splitText.getTopNode());
+				
+				var rightBottomNode = splitTree.getRightTree().getBottomNode()
+				console.debug(rightBottomNode.firstChild);
+				rightBottomNode.insertBefore(splitText.getBottomNode(), rightBottomNode.firstChild);
+				
+				pn.removeChild(paragraphNode);
+				pn.appendChild(splitTree.getLeftTree().getTopNode())
+				pn.appendChild(this._createInsertNode("NEW PARAGRAPH HERE!... styled correctly", tagStack));
+				pn.appendChild(splitTree.getRightTree().getTopNode());
+			}
+			
+			this._findParentParagraphNode = function(startNode, limitNode) {
+				var node = startNode;
+				while (node != limitNode) {
+					if (node.tagName == "P") break;
+					node = node.parentNode;
+				}
+				return node;
+			}
+			
+			this._buildTagStack = function() {
+				var tagStack = [];
+				var node = this._selection.getNode().parentNode;
+				while (node != this._containerNode) {
+					tagStack.push(node.cloneNode(false));
+					node = node.parentNode;
+				}
+				return tagStack;
+			}
+			
+			this._createInsertNode = function(text, tagStack) {
+				var headNode = tagStack[tagStack.length-1];
+				var tailNode = tagStack[0];
+				
+				for (var previousNode = null; tagStack.length; ) {
+					var node = tagStack.pop();
+					if (previousNode) previousNode.appendChild(node);
+					previousNode = node;
+				}
+				
+				tailNode.appendChild(document.createTextNode(text));
+				return headNode;
+			}
+			
+			this._split = function(splitNode, limitNode) {
+				var node = splitNode.parentNode;
+				var lastNewLeftNode = lastNewRightNode = null;
+				var leftBottomNode = rightBottomNode = null;
+				
+				while (node != limitNode.parentNode) {
+					var newLeftNode = node.cloneNode(false);
+					var newRightNode = node.cloneNode(false);
+					var splitNodeIndex = MAX_SPLIT_NODE_INDEX;
+					
+					for (var i=0; i < node.childNodes.length; ++i) {
+						var child = node.childNodes[i];
+						
+						if (child == splitNode) {										// At split node
+							if (lastNewLeftNode) {
+								newLeftNode.appendChild(lastNewLeftNode);
+							}
+							if (lastNewRightNode) {
+								newRightNode.appendChild(lastNewRightNode);
+							}
+							splitNode = node;
+							splitNodeIndex = i;
+						} else if (i < splitNodeIndex) {						// Split left
+							var newChild = child.cloneNode(true);
+							newLeftNode.appendChild(newChild);
+						} else if (i > splitNodeIndex) {						// Split right
+							var newChild = child.cloneNode(true);
+							newRightNode.appendChild(newChild);
+						}
+						
+					}
+					if (!leftBottomNode) {
+						leftBottomNode = newLeftNode;
+						console.debug("leftBottomNode", leftBottomNode);
+					}
+					if (!rightBottomNode) {
+						rightBottomNode = newRightNode;
+						console.debug("rightBottomNode", rightBottomNode);
+					}
+					
+					lastNewLeftNode = newLeftNode;
+					lastNewRightNode = newRightNode;
+					node = node.parentNode;
+				}
+				
+				console.debug("leftTopNode", lastNewLeftNode);
+				
+				return new SplitTree(
+						new Tree(lastNewLeftNode, leftBottomNode),
+						new Tree(lastNewRightNode, rightBottomNode)
+					);
+			}
+		}
+		
+		function SplitTree(leftTree, rightTree) {
+			this._leftTree = leftTree;
+			this._rightTree = rightTree;
+			this.getLeftTree = function() {
+				return this._leftTree;
+			}
+			this.getRightTree = function() {
+				return this._rightTree;
+			}
+		}
+		
+		function Tree(topNode, bottomNode) {
+			this._topNode = topNode;
+			this._bottomNode = bottomNode;
+			this.getTopNode = function() {
+				return this._topNode;
+			}
+			this.getBottomNode = function() {
+				return this._bottomNode;
+			}
+		}
+		
+		function findSelection(node) {
+			var ret = null;
+			for (var i=0; i < node.childNodes.length; ++i) {
+				var child = node.childNodes[i];
+				if (child.nodeType == TEXT_NODE) {
+					var index = child.textContent.indexOf(SPLIT_TEXT);
+					if (index != -1) {
+						return new Selection(child, index, index + SPLIT_TEXT.length);
+					}
+				} else {
+					var ret = findSelection(child);
+					if (ret) break;
+				}
+			}
+			return ret;
+		}
+	
+		window.onload = function() {
+			var containerNode = document.getElementById("split_container");
+			var originalNode = document.getElementById("split_original");
+			var selection = findSelection(containerNode);
+			var splitter = new Splitter(containerNode, selection);
+			
+			originalNode.innerHTML = containerNode.innerHTML;
+			splitter.doSplit();
+		}
+	</script>
+	
+	<style type="text/css">
+	.container { padding: 20px; background-color: #a6a6a6; }
+	</style>
+</head>
+<body>
+
+
+<h1>Split Content</h1>
+<div id="split_container" class="container">
+	<p>
+		Lorem ipsum dolor sit
+		<a href="">amet</a>
+		, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco
+		<span style="font-weight: bold">
+			laboris nisi ut aliquip ex ea
+			<span style="font-style: italic">
+				commodo consequat.
+				<img src="http://svn.dojotoolkit.org/src/branches/1.1/util/resources/logo/positive/dojo.logo.png" height="20" />
+				Duis aute irure dolor __SPLIT_POINT__ in reprehenderit in
+			</span>
+			voluptate velit esse cillum
+		</span>
+		dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+		<a href="">
+			culpa
+		</a>
+		qui officia deserunt mollit anim id est laborum.
+	</p>
+</div>
+
+<hr/>
+
+<h1>Original Content</h1>
+<div id="split_original" class="container"></div>
+
+</body>
+</html>
